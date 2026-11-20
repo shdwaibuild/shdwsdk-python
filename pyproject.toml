@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "shdwsdk"
+version = "0.1.1"
+description = "Non-blocking Scope 3 AI carbon telemetry and AI-BOM discovery for OpenAI, Anthropic, Gemini and LiteLLM."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "SHDWsdk" }]
+keywords = ["ai", "carbon", "scope-3", "telemetry", "ai-bom", "litellm", "openai", "anthropic"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+]
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[project.urls]
+Homepage = "https://www.shdwsdk.ai"
+Documentation = "https://www.shdwsdk.ai/docs/python-otel-litellm"
+Repository = "https://github.com/shdwaibuild/shdwsdk-python"
+Issues = "https://github.com/shdwaibuild/shdwsdk-python/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/shdwsdk"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

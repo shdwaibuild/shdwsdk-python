@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "shdwsdk"
-version = "0.1.1"
+version = "0.1.2"
 description = "Non-blocking Scope 3 AI carbon telemetry and AI-BOM discovery for OpenAI, Anthropic, Gemini and LiteLLM."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -33,3 +33,6 @@ packages = ["src/shdwsdk"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "README.md", "LICENSE", "CHANGELOG.md", "pyproject.toml"]

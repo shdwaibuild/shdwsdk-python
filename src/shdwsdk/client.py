@@ -20,7 +20,7 @@ DEFAULT_ENDPOINT = "https://www.shdwsdk.ai/api/v1/ingest-telemetry"
 MAX_TIMEOUT_SECONDS = 1.5
 MAX_BUFFER = 5000
 MAX_BATCH = 250
-SDK_VERSION = "0.1.1"
+SDK_VERSION = "0.1.2"
 
 Sender = Callable[[str, Dict[str, str], bytes, float], int]
 

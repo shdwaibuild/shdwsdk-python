@@ -38,7 +38,7 @@ def test_record_and_flush_with_customer_context():
     assert timeout <= 1.5
     assert [e.get("customer_ref") for e in rec.events] == ["acme-corp", None]
     assert [e["provider"] for e in rec.events] == ["anthropic", "openai"]
-    assert shdw.stats == {"queued": 2, "delivered": 2, "dropped": 0}
+    assert shdw.stats == {"queued": 2, "delivered": 2, "dropped": 0, "retried": 0}
     assert all("grid_region" not in e for e in rec.events)  # server applies the Settings region
 
 

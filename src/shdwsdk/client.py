@@ -20,7 +20,11 @@ DEFAULT_ENDPOINT = "https://www.shdwsdk.ai/api/v1/ingest-telemetry"
 MAX_TIMEOUT_SECONDS = 1.5
 MAX_BUFFER = 5000
 MAX_BATCH = 250
-SDK_VERSION = "0.1.2"
+SDK_VERSION = "0.2.0"
+# Delivery counters ride along with a batch at most once a minute, or are sent
+# on their own every five minutes when idle (only if there is something new).
+REPORT_WITH_BATCH_SECONDS = 60.0
+REPORT_WHEN_IDLE_SECONDS = 300.0
 
 Sender = Callable[[str, Dict[str, str], bytes, float], int]
 
@@ -65,6 +69,8 @@ class ShdwClient:
         source: str = "sdk-python",
         sender: Optional[Sender] = None,
         start_thread: bool = True,
+        delivery_reports: bool = True,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.api_key = api_key or os.environ.get("SHDW_API_KEY", "")
         self.endpoint = endpoint or os.environ.get("SHDW_ENDPOINT", DEFAULT_ENDPOINT)
@@ -80,7 +86,12 @@ class ShdwClient:
         self._lock = threading.Lock()
         self._wake = threading.Event()
         self._closed = False
-        self.stats = {"queued": 0, "delivered": 0, "dropped": 0}
+        self.stats = {"queued": 0, "delivered": 0, "dropped": 0, "retried": 0}
+        # Counters only (never payloads), so the developer console can show drop rates.
+        self.delivery_reports = delivery_reports and os.environ.get("SHDW_DELIVERY_REPORTS", "1") != "0"
+        self._clock = clock
+        self._unreported: Dict[str, Any] = {"delivered": 0, "dropped": 0, "retried": 0, "reasons": {}}
+        self._last_report = clock()
         self._thread: Optional[threading.Thread] = None
         if start_thread:
             self._thread = threading.Thread(target=self._run, name="shdwsdk", daemon=True)
@@ -130,7 +141,7 @@ class ShdwClient:
             with self._lock:
                 if len(self._buffer) >= MAX_BUFFER:
                     self._buffer.pop(0)
-                    self.stats["dropped"] += 1
+                    self._count_drop("buffer_overflow", 1)
                 self._buffer.append(event)
                 self.stats["queued"] += 1
                 full = len(self._buffer) >= self.batch_size
@@ -147,6 +158,8 @@ class ShdwClient:
                     batch = self._buffer[: MAX_BATCH]
                     del self._buffer[: MAX_BATCH]
                 if not batch:
+                    if self._report_due(idle=True):
+                        self._deliver([])
                     return
                 self._deliver(batch)
         except Exception:  # pragma: no cover
@@ -160,26 +173,95 @@ class ShdwClient:
         self._wake.set()
 
     # ---------------------------------------------------------------- internal
+    def _count_drop(self, reason: str, n: int) -> None:
+        """Caller holds the lock (or is the only writer for this batch)."""
+        self.stats["dropped"] += n
+        self._unreported["dropped"] += n
+        reasons = self._unreported["reasons"]
+        reasons[reason] = reasons.get(reason, 0) + n
+
+    def _report_due(self, idle: bool) -> bool:
+        if not self.delivery_reports:
+            return False
+        with self._lock:
+            u = self._unreported
+            if u["delivered"] + u["dropped"] + u["retried"] == 0:
+                return False
+            if not idle and u["dropped"] > 0:
+                return True
+            wait = REPORT_WHEN_IDLE_SECONDS if idle else REPORT_WITH_BATCH_SECONDS
+            return self._clock() - self._last_report >= wait
+
+    def _build_report(self) -> Dict[str, Any]:
+        with self._lock:
+            u = self._unreported
+            return {
+                "sdk": "sdk-python",
+                "sdk_version": SDK_VERSION,
+                "delivered": u["delivered"],
+                "dropped": u["dropped"],
+                "retried": u["retried"],
+                "drop_reasons": dict(u["reasons"]),
+                "pending": len(self._buffer),
+            }
+
+    def _mark_reported(self, report: Dict[str, Any]) -> None:
+        with self._lock:
+            u = self._unreported
+            for k in ("delivered", "dropped", "retried"):
+                u[k] = max(0, u[k] - report[k])
+            for k, n in report["drop_reasons"].items():
+                left = u["reasons"].get(k, 0) - n
+                if left > 0:
+                    u["reasons"][k] = left
+                else:
+                    u["reasons"].pop(k, None)
+            self._last_report = self._clock()
+
     def _deliver(self, batch: List[Dict[str, Any]]) -> None:
-        body = json.dumps({"events": batch}).encode()
+        report = self._build_report() if self._report_due(idle=not batch) else None
+        payload: Dict[str, Any] = {"events": batch}
+        if report:
+            payload["delivery"] = report
+        body = json.dumps(payload).encode()
         headers = {
             "Content-Type": "application/json",
             "X-SHDW-Key": self.api_key,
             "X-SHDW-Source": self.source,
             "X-SHDW-Python-SDK-Version": SDK_VERSION,
         }
+        status = 0
         for attempt in range(2):
             try:
                 status = self._send(self.endpoint, headers, body, self.timeout)
             except Exception:
                 status = 0
             if 200 <= status < 300:
-                self.stats["delivered"] += len(batch)
+                with self._lock:
+                    self.stats["delivered"] += len(batch)
+                    self._unreported["delivered"] += len(batch)
+                if report:
+                    self._mark_reported(report)
                 return
             if 400 <= status < 500 and status != 429:
                 break  # bad key or payload: retrying will not help
+            if attempt == 0 and batch:
+                with self._lock:
+                    self.stats["retried"] += len(batch)
+                    self._unreported["retried"] += len(batch)
             time.sleep(0.2 * (attempt + 1))
-        self.stats["dropped"] += len(batch)
+        if not batch:
+            return
+        if status in (401, 403):
+            reason = "rejected_auth"
+        elif status in (400, 413, 422):
+            reason = "rejected_payload"
+        elif 400 <= status < 500 and status != 429:
+            reason = "rejected_other"
+        else:
+            reason = "unreachable"
+        with self._lock:
+            self._count_drop(reason, len(batch))
         log.warning("shdwsdk: dropped %d telemetry events (HTTP %s)", len(batch), status)
 
     def _run(self) -> None:

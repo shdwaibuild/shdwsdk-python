@@ -82,6 +82,11 @@ Events are sent from a background thread every 5 seconds and at exit. In serverl
 | Input / output token counts | Completions |
 | Grid region and workload name you configure | API keys for your AI providers |
 | Optional customer reference you choose | User emails or personal data |
+| Delivery counters: delivered, dropped by reason, retried | |
+
+## Delivery reports
+
+From 0.2.0 the client sends its delivery counters (counts only) with normal batches about once a minute, so the [developer console](https://www.shdwsdk.ai/docs/developer-console) can show drop rates. Turn them off with `ShdwClient(delivery_reports=False)` or `SHDW_DELIVERY_REPORTS=0`.
 
 ## Development
 
